@@ -1,0 +1,418 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "สคริปAssistant |GG",
+   LoadingTitle = "Loading Script...",
+   LoadingSubtitle = "by john",
+   ConfigurationSaving = {
+      Enabled = true,
+      FolderName = "PremiumHubConfig",
+      FileName = "CombatSettings"
+   }
+})
+
+-- // Services // --
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+
+-- // Variables & Settings // --
+local Settings = {
+    Aimbot = false,
+    FovRadius = 100,
+    FovColor = Color3.fromRGB(255, 0, 0),
+    FovVisible = true,
+    
+    ESP = false,
+    EspBoxes = true,
+    EspLines = true,
+    EspHealth = true,
+    
+    SpamIce = false,
+    KillAll = false,
+    FriendCheck = false -- เพิ่มระบบป้องกันเพื่อน
+}
+
+-- // FOV Circle Drawing // --
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 2
+FOVCircle.NumSides = 60
+FOVCircle.Filled = false
+FOVCircle.Transparency = 1
+
+local function updateFOV()
+    FOVCircle.Radius = Settings.FovRadius
+    FOVCircle.Color = Settings.FovColor
+    FOVCircle.Visible = Settings.FovVisible
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+end
+
+-- // Helper Function: ตรวจสอบว่าเป็นเพื่อนหรือไม่ // --
+local function isFriend(player)
+    if not Settings.FriendCheck then return false end
+    return LocalPlayer:IsFriendsWith(player.UserId)
+end
+
+-- // Helper Function: หาผู้เล่นที่ใกล้ที่สุดใน FOV // --
+local function getClosestPlayerInFOV()
+    local closestPlayer = nil
+    local shortestDistance = Settings.FovRadius
+
+    for _, player in pairs(Players:GetPlayers()) do
+        -- เพิ่มเงื่อนไข `not isFriend(player)` เพื่อข้ามคนที่เป็นเพื่อนถ้าเปิดฟังก์ชันไว้
+        if player ~= LocalPlayer and not isFriend(player) and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+            local pos, onScreen = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+            if onScreen then
+                local distance = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)).Magnitude
+                if distance < shortestDistance then
+                    closestPlayer = player
+                    shortestDistance = distance
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- // Shoot Remote Wrapper // --
+local function fireWeapon(targetPlayer, weaponName)
+    local char = LocalPlayer.Character
+    local weapon = char and char:FindFirstChild(weaponName)
+    if not weapon then return end
+    
+    local targetPart = targetPlayer.Character and targetPlayer.Character:FindFirstChild("Head")
+    if not targetPart then return end
+
+    local originPos = char.HumanoidRootPart.Position
+    local targetPos = targetPart.Position
+    local direction = (targetPos - originPos).Unit
+
+    -- W__red (Shot Trigger)
+    local argsRed = {
+        weapon,
+        {
+            id = 1,
+            charge = 0,
+            origin = vector.create(originPos.X, originPos.Y, originPos.Z),
+            dir = vector.create(direction.X, direction.Y, direction.Z)
+        }
+    }
+    pcall(function()
+        ReplicatedStorage:WaitForChild("Routers"):WaitForChild("WeaponSystemRemotes"):WaitForChild("W__red"):FireServer(unpack(argsRed))
+    end)
+
+    -- W__it (Hit Register)
+    local argsIt = {
+        weapon,
+        {
+            p = vector.create(targetPos.X, targetPos.Y, targetPos.Z),
+            pid = 1,
+            part = targetPart,
+            d = (targetPos - originPos).Magnitude,
+            maxDist = 1000,
+            h = targetPart.Parent,
+            m = Enum.Material.Brick,
+            n = vector.create(0, 1, 0),
+            t = 0.1,
+            sid = 1
+        }
+    }
+    pcall(function()
+        ReplicatedStorage:WaitForChild("Routers"):WaitForChild("WeaponSystemRemotes"):WaitForChild("W__it"):FireServer(unpack(argsIt))
+    end)
+end
+
+-- // Main Combat Loop // --
+RunService.RenderStepped:Connect(function()
+    updateFOV()
+    
+    if Settings.Aimbot then
+        local target = getClosestPlayerInFOV()
+        if target and target.Character and target.Character:FindFirstChild("Head") then
+            -- Auto Shoot if holding UMP45 or M4A1
+            local char = LocalPlayer.Character
+            if char then
+                if char:FindFirstChild("UMP45") then
+                    fireWeapon(target, "UMP45")
+                elseif char:FindFirstChild("M4A1") then
+                    fireWeapon(target, "M4A1")
+                end
+            end
+        end
+    end
+end)
+
+-- // ESP System // --
+local cache = {}
+local function createESP(player)
+    if cache[player] then return end
+    
+    local box = Drawing.new("Square")
+    box.Thickness = 1
+    box.Filled = false
+    box.Color = Color3.fromRGB(255, 255, 255)
+    
+    local line = Drawing.new("Line")
+    line.Thickness = 1
+    line.Color = Color3.fromRGB(255, 255, 255)
+    
+    local healthText = Drawing.new("Text")
+    healthText.Size = 14
+    healthText.Center = true
+    healthText.Outline = true
+    healthText.Color = Color3.fromRGB(0, 255, 0)
+
+    cache[player] = {box = box, line = line, healthText = healthText}
+    
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        if not player.Parent or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") or not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then
+            box.Visible = false
+            line.Visible = false
+            healthText.Visible = false
+            if not player.Parent then
+                box:Remove()
+                line:Remove()
+                healthText:Remove()
+                cache[player] = nil
+                connection:Disconnect()
+            end
+            return
+        end
+
+        local hrp = player.Character.HumanoidRootPart
+        local hum = player.Character.Humanoid
+        local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+        
+        -- ตรวจสอบเงื่อนไขการแสดงผล ESP
+        if onScreen and Settings.ESP then
+            -- 1. ESP BOX (สี่เหลี่ยมขอบรอบตัว)
+            if Settings.EspBoxes then
+                box.Size = Vector2.new(2000 / pos.Z, 3000 / pos.Z)
+                box.Position = Vector2.new(pos.X - box.Size.X / 2, pos.Y - box.Size.Y / 2)
+                box.Color = isFriend(player) and Color3.fromRGB(0, 255, 255) or Color3.fromRGB(255, 255, 255) -- ถ้าเป็นเพื่อนกล่องจะเป็นสีฟ้า
+                box.Visible = true
+            else
+                box.Visible = false
+            end
+            
+            -- 2. ESP LINES & FOV Target Lines (เส้นชี้หาผู้เล่น)
+            local isTargetedByFov = false
+            if Settings.Aimbot then
+                local currentTarget = getClosestPlayerInFOV()
+                if currentTarget == player then
+                    isTargetedByFov = true
+                end
+            end
+
+            if Settings.EspLines or isTargetedByFov then
+                line.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                line.To = Vector2.new(pos.X, pos.Y)
+                -- เปลี่ยนสีเส้นตามสถานะ: ล็อคเป้า = แดง | เพื่อน = ฟ้า | ปกติ = ขาว
+                if isTargetedByFov then
+                    line.Color = Color3.fromRGB(255, 0, 0)
+                elseif isFriend(player) then
+                    line.Color = Color3.fromRGB(0, 255, 255)
+                else
+                    line.Color = Color3.fromRGB(255, 255, 255)
+                end
+                line.Visible = true
+            else
+                line.Visible = false
+            end
+            
+            -- 3. ESP HEALTH (บอกเลือด)
+            if Settings.EspHealth then
+                healthText.Text = (isFriend(player) and "[FRIEND] " or "") .. "HP: " .. math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth)
+                healthText.Position = Vector2.new(pos.X, pos.Y - (3500 / pos.Z) / 2 - 15)
+                healthText.Visible = true
+            else
+                healthText.Visible = false
+            end
+        else
+            box.Visible = false
+            line.Visible = false
+            healthText.Visible = false
+        end
+    end)
+end
+
+Players.PlayerAdded:Connect(createESP)
+for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then createESP(p) end end
+
+-- // ระบบวนลูปความเร็วสูง (Spam Ice & Kill All) // --
+
+-- 1. มัลติเธรดสำหรับระเบิด/เสกน้ำแข็ง เพื่อให้ทำงานได้รัวมากที่สุด (ยิงรีโมทแบบถี่ๆ No Delay Loop)
+task.spawn(function()
+    while true do
+        if Settings.SpamIce then
+            for _, player in pairs(Players:GetPlayers()) do
+                -- จะไม่สแปมใส่อวตารเพื่อนถ้าเปิดระบบเซฟเพื่อนไว้
+                if player ~= LocalPlayer and not isFriend(player) and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    task.spawn(function() -- ใช้ซ้อนอีกชั้นเพื่อป้องกันรีโมทคอขวด วางรัวสะใจแน่นอน
+                        local pPos = player.Character.HumanoidRootPart.Position
+                        local args = {
+                            vector.create(pPos.X, pPos.Y, pPos.Z),
+                            6.341584584095973
+                        }
+                        ReplicatedStorage:WaitForChild("Routers"):WaitForChild("BuildingSystemRemotes"):WaitForChild("PlaceIce"):FireServer(unpack(args))
+                    end)
+                end
+            end
+        end
+        task.wait() -- รันด้วยความเร็วสูงสุดเท่าที่เกมจะทำได้ในระบบดึงข้อมูล (0 วินาทีในรูปแบบเธรดสั้น)
+    end
+end)
+
+-- 2. วนลูปฟังก์ชันสำหรับระบบ Kill All
+task.spawn(function()
+    while true do
+        if Settings.KillAll then
+            -- สลับถืออาวุธแบบอัตโนมัติ (Equip Weapon หากอยู่ใน Backpack)
+            local bp = LocalPlayer:FindFirstChild("Backpack")
+            local char = LocalPlayer.Character
+            if bp and char then
+                local weapon = bp:FindFirstChild("UMP45") or bp:FindFirstChild("M4A1")
+                if weapon then weapon.Parent = char end
+            end
+            
+            -- วาร์ปเหนือหัวทีละคนแล้วสาดกระสุนใส่ (ยกเว้นเพื่อน)
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and not isFriend(player) and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+                    local targetHrp = player.Character.HumanoidRootPart
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        -- บินกึ่งวาร์ปอยู่เหนือหัวศัตรู 10 หน่วย
+                        char.HumanoidRootPart.CFrame = targetHrp.CFrame * CFrame.new(0, 10, 0)
+                        task.wait(0.05)
+                        
+                        -- ยิงใส่เป้าหมาย
+                        if char:FindFirstChild("UMP45") then
+                            fireWeapon(player, "UMP45")
+                        elseif char:FindFirstChild("M4A1") then
+                            fireWeapon(player, "M4A1")
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+
+-- // --- UI TABS & ELEMENTS --- // --
+
+local CombatTab = Window:CreateTab("Combat & FOV", 4483362458)
+local EspTab = Window:CreateTab("Visuals & ESP", 4483362458)
+local ExploitTab = Window:CreateTab("Exploits & Kill", 4483362458)
+
+-- [ COMBAT TAB ]
+CombatTab:CreateToggle({
+   Name = "เปิดระบบ Lock Head & Auto Shoot",
+   CurrentValue = false,
+   Flag = "AimbotToggle",
+   Callback = function(Value)
+       Settings.Aimbot = Value
+   end,
+})
+
+-- เพิ่มปุ่มเปิด/ปิดระบบตรวจสอบเพื่อนตรงแท็บ Combat ชัดเจน
+CombatTab:CreateToggle({
+   Name = "🛡️ เปิดระบบป้องกันเพื่อน (Friend Check)",
+   CurrentValue = false,
+   Flag = "FriendCheckToggle",
+   Callback = function(Value)
+       Settings.FriendCheck = Value
+   end,
+})
+
+CombatTab:CreateToggle({
+   Name = "แสดงวงกลม FOV",
+   CurrentValue = true,
+   Flag = "FovVisible",
+   Callback = function(Value)
+       Settings.FovVisible = Value
+   end,
+})
+
+CombatTab:CreateSlider({
+   Name = "ปรับขนาดวงกลม FOV",
+   Range = {30, 500},
+   Increment = 5,
+   Suffix = " Pixels",
+   CurrentValue = 100,
+   Flag = "FovSlider",
+   Callback = function(Value)
+       Settings.FovRadius = Value
+   end,
+})
+
+CombatTab:CreateColorPicker({
+    Name = "เปลี่ยนสีวงกลม FOV",
+    Color = Color3.fromRGB(255, 0, 0),
+    Flag = "FovColor",
+    Callback = function(Value)
+        Settings.FovColor = Value
+    end
+})
+
+-- [ ESP TAB ]
+EspTab:CreateToggle({
+   Name = "เปิดระบบ ESP (รวม)",
+   CurrentValue = false,
+   Flag = "MainEsp",
+   Callback = function(Value)
+       Settings.ESP = Value
+   end,
+})
+
+EspTab:CreateToggle({
+   Name = "เปิดขอบสี่เหลี่ยม (ESP Box)",
+   CurrentValue = true,
+   Flag = "EspBox",
+   Callback = function(Value)
+       Settings.EspBoxes = Value
+   end,
+})
+
+EspTab:CreateToggle({
+   Name = "เปิดเส้นชี้ (ESP Lines)",
+   CurrentValue = true,
+   Flag = "EspLine",
+   Callback = function(Value)
+       Settings.EspLines = Value
+   end,
+})
+
+EspTab:CreateToggle({
+   Name = "แสดงหลอดเลือด / ตัวเลขเลือด (ESP Health)",
+   CurrentValue = true,
+   Flag = "EspHealth",
+   Callback = function(Value)
+       Settings.EspHealth = Value
+   end,
+})
+
+-- [ EXPLOIT TAB ]
+ExploitTab:CreateToggle({
+   Name = "ยิงรีโมท Ice Spam รัวๆ (ตัวไม่วาร์ป + ข้ามเพื่อน)",
+   CurrentValue = false,
+   Flag = "IceSpam",
+   Callback = function(Value)
+       Settings.SpamIce = Value
+   end,
+})
+
+ExploitTab:CreateToggle({
+   Name = "ฆ่าทุกคน (Kill All + Auto Equip + Warp เหนือหัว)",
+   CurrentValue = false,
+   Flag = "KillAllToggle",
+   Callback = function(Value)
+       Settings.KillAll = Value
+   end,
+})
+
+Rayfield:LoadConfiguration()
